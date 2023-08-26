@@ -1,0 +1,386 @@
+---
+title: "The US Airline Data Analysis Project"
+author: "Chang Jia Jie"
+date: "2023-03-15"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+Load libraries
+
+```{r}
+library(dplyr)
+library(caTools)
+library(ggplot2)
+library(tidyr)
+library(pROC)
+```
+
+Import data
+
+```{r}
+df1 <- read.csv('2002.csv')
+df2 <- read.csv('2003.csv')
+df <- rbind(df1,df2)
+airports<-read.csv('airports.csv')
+planedata<-read.csv('plane-data.csv')
+
+```
+
+Investigate the data
+```{r}
+str(df)
+summary(df)
+```
+
+Handling missing data
+```{r}
+#Remove six empty columns
+df<-df%>%select(-SecurityDelay,-LateAircraftDelay,-CarrierDelay,-WeatherDelay,-NASDelay,-CancellationCode)
+
+#Remove unused columns
+df<-df%>%select(-UniqueCarrier, -FlightNum, -TaxiIn, -TaxiOut, -Cancelled, -Diverted)
+
+#Remove rows that contain empty values
+df<-df[complete.cases(df),]
+
+summary(df)
+```
+
+## Create new x variables
+
+According to the U.S. Department of Transportation, a flight is considered to be a delay if it departs or arrives 15 minutes or more later than the scheduled time. 
+```{r}
+df$dDelay<-ifelse(df$DepDelay>=15,1,0)
+df$aDelay<-ifelse(df$ArrDelay>=15,1,0)
+```
+
+Split a day into 4 parts
+```{r}
+df$time <- ifelse(df$DepTime >= 1800, '1800-2400', 
+                        ifelse(df$DepTime >= 1200, '1200-1800',
+                               ifelse(df$DepTime >= 600, '0600-1200', '0000-0600')))
+```
+
+Create season variable
+```{r}
+df$date <- ISOdatetime(df$Year, df$Month, df$DayofMonth, 0,0,0,tz="America/Los_Angeles")
+spring_2002 <- as.POSIXct("2002-03-20 14:16:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+summer_2002 <- as.POSIXct("2002-06-21 9:24:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+autumn_2002 <- as.POSIXct("2002-09-23 0:56:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+winter_2002 <- as.POSIXct("2002-12-21 20:15:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+spring_2003 <- as.POSIXct("2003-03-20 20:00:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+summer_2003 <- as.POSIXct("2003-06-21 15:10:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+autumn_2003 <- as.POSIXct("2003-09-23 6:47:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+winter_2003 <- as.POSIXct("2003-12-22 2:04:0", format = '%Y-%m-%d %H:%M', tz="America/Los_Angeles")
+df$season <- ifelse(df$date >= spring_2002 & df$date < summer_2002, 'Spring',
+            ifelse(df$date >= summer_2002 & df$date < autumn_2002, 'Summer',
+            ifelse(df$date >= autumn_2002 & df$date < winter_2002, 'Autumn',
+            ifelse(df$date >= winter_2002 & df$date < spring_2003, 'Winter',
+            ifelse(df$date >= spring_2003 & df$date < summer_2003, 'Spring',
+            ifelse(df$date >= summer_2003 & df$date < autumn_2003, 'Summer',
+            ifelse(df$date >= autumn_2003 & df$date < winter_2003, 'Autumn', 'Winter')))))))
+      
+```
+
+
+## Question 1
+
+Best time of day to fly to minimize delays
+```{r}
+#compute table of frequency of departure delay by time
+freqtime <- table(df$time[df$dDelay == 1])
+
+#compute table of frequency of flight by time
+freqtime2 <- table(df$time)
+
+#calculate percentage of departure delay by time
+probt <- freqtime/freqtime2
+
+#Plot Bar Chart
+barplot(probt, main = "Percentage of Delay by Time of the Day",
+        xlab = "Time of the Day", ylab = "Percentage",
+        col = "coral")
+```
+
+Best day of the week to fly to minimize delays
+```{r}
+#compute table of frequency of departure delay by day of week
+freqd <- table(df$DayOfWeek[df$dDelay == 1])
+
+#compute table of frequency of flight by day of week
+freqd2 <- table(df$DayOfWeek)
+
+#calculate percentage of departure delay by day of week
+probd <- freqd/freqd2
+
+#Plot Bar Chart
+barplot(probd, main = "Percentage of Delay by Day of the Week",
+        xlab = "Day of the Week", ylab = "Percentage",
+        col = "coral")
+```
+
+Best month of the year to fly to minimize delays
+```{r}
+#compute table of frequency of departure delay by month of year
+freqmonth <- table(df$Month[df$dDelay == 1])
+
+#compute table of frequency of flight by month of year
+freqmonth2 <- table(df$Month)
+
+#calculate percentage of departure delay by month of year
+probm <- freqmonth/freqmonth2
+
+#Plot Bar Chart
+barplot(probm, main = "Percentage of Delay Month of the Year",
+        xlab = "Month of the Year", ylab = "Percentage",
+        col = "coral")
+```
+
+Best season of the year to fly to minimize delays
+```{r}
+#Compute table of frequency of departure delay by season of year
+freqseason <- table(df$season[df$dDelay == 1])
+
+#Compute table of frequency of flight by season of year
+freqseason2 <- table(df$season)
+
+#Calculate percentage of departure delay by season of year
+probs <- freqseason/freqseason2
+
+#Plot Bar Chart
+barplot(probs, main = "Percentage of Delay by Season",
+        xlab = "Season", ylab = "Percentage",
+        col = "coral")
+```
+
+## Question 2
+
+Merge planedata and df to create age variable
+```{r}
+#Rename column 'tailnum' to 'TailNum'
+planedata$TailNum <- planedata$tailnum
+
+#Replace blank values with NA
+planedata[planedata == ''] <- NA
+
+#Merge df and planedata by 'TailNum'
+joindf <- merge(df,planedata, by='TailNum')
+str(joindf)
+
+#Remove unused columns
+joindf <- joindf%>%select(-TailNum, -tailnum, -type, -manufacturer, -model, -status, -aircraft_type, -engine_type, -year)
+
+#Remove rows with missing values
+joindf<-joindf[complete.cases(joindf),]
+```
+
+Create Age variable by difference of flying date and issue date 
+```{r}
+#Change issue_date into POSIXct type
+joindf$issue_date <- as.POSIXct(joindf$issue_date, format="%m/%d/%Y", tz="America/Los_Angeles")
+
+#subtract issue date from flying date in terms of days unit
+joindf$age <- difftime(joindf$date, joindf$issue_date, units = "days")
+
+#Turn age into numeric variable in terms of years unit
+joindf$age <- as.numeric(joindf$age/365)
+
+#Remove rows with NA and negative age values 
+joindf <- joindf[joindf$age >= 0, ]
+joindf<-joindf[complete.cases(joindf),]
+```
+
+
+Construct correlation test between 'age' and 'arrival delay'
+```{r}
+#Create a new column, age2 that has rounded age value
+joindf$age2 <- round(joindf$age)
+
+#Compute table of frequency of arrival delay by age
+freqage <- table(joindf$age2[joindf$aDelay == 1])
+
+#Compute table of frequency of flights by age
+freqage2 <- table(joindf$age2)
+
+#Calculate probability of arrival delay by age
+probage <- freqage/freqage2
+
+#Turn table into data frame
+df3 <- as.data.frame(probage)
+names(df3) <- c('Age','Percentage of Delay')
+
+#Turn age variable into integer type
+df3$Age <- as.integer(df3$Age)
+cor.test(df3$Age,df3$`Percentage of Delay`)
+```
+
+Plot bar chart of Delay Percentage vs Age
+```{r}
+#Plot Bar Chart
+barplot(probage, main = "Percentage of Delay by Age",
+        xlab = "Age", ylab = "Percentage",
+        col = "coral")
+```
+
+Create Age Group variable by split age into 3 parts
+```{r}
+joindf$agegroup <- ifelse(joindf$age2 >= 18, '18-28', 
+                        ifelse(joindf$age2 >= 9, '9-17', '0-8'))
+```
+
+```{r}
+#compute table of frequency of arrival delay by age group
+freqgroup <- table(joindf$agegroup[joindf$aDelay == 1])
+
+#compute table of frequency of flight by age group
+freqgroup2 <- table(joindf$agegroup)
+
+#calculate percentage of arrival delay by age group
+probgroup <- freqgroup/freqgroup2
+
+#Plot Bar Chart
+barplot(probgroup, main = "Percentage of Delay by Age Group",
+        xlab = "Age Group", ylab = "Percentage",
+        col = "coral")
+```
+
+## Question 3
+```{r}
+#Create new variable location that combines Origin and Destination
+df1$location <- paste(df1$Origin, df1$Dest, sep='-')
+df2$location <- paste(df2$Origin, df2$Dest, sep='-')
+
+#top 10 frequently travel locations in 2002
+top_10_values_1 <- sort(table(df1$location), decreasing = TRUE)[1:10]
+
+#frequency of the 10 same locations in 2003
+top_10_values_2 <- table(df2$location)[row.names(top_10_values_1)]
+
+# Create data frames for each year's flight frequencies
+top_10_values_1 <- as.data.frame(top_10_values_1)
+names(top_10_values_1) <- c('location', 'frequency')
+
+top_10_values_2 <- as.data.frame(top_10_values_2)
+names(top_10_values_2) <- c('location', 'frequency')
+
+# Combine the data frames into one
+flight_data <- rbind(top_10_values_1, top_10_values_2)
+flight_data$Year <- rep(c("2002", "2003"), each = 10)
+
+# Compute table
+flight_data_wide <- flight_data %>%
+  pivot_wider(names_from = Year, values_from = frequency)
+flight_data_wide$location2 <- flight_data_wide$location
+flight_data_wide <- flight_data_wide %>%
+  separate(location2, into = c("Origin", "Dest"), sep = "-")
+
+# Join flight_data_wide with airports based on Origin and Dest columns
+flight_data_wide <- flight_data_wide %>%
+  left_join(airports, by = c("Origin" = "iata")) %>%
+  left_join(airports, by = c("Dest" = "iata"), suffix = c("_origin", "_dest"))
+
+# Replace Origin and Dest columns with airport values
+flight_data_wide$Origin <- flight_data_wide$airport_origin
+flight_data_wide$Dest <- flight_data_wide$airport_dest
+
+# Remove other columns
+flight_data_wide <- flight_data_wide[,1:5]
+flight_data_wide
+```
+
+Plot line chart
+```{r}
+line_chart <- ggplot(flight_data, aes(x = location, y = frequency, group = Year, color = Year)) +
+  geom_line(aes(y = frequency), linewidth=0.8) +
+  labs(title = "Flight Frequencies among Different Locations", x = "Location", y = "Frequency", color = "Year")
+line_chart
+```
+
+## Question 4
+Create detector function
+```{r}
+detector <- function(Y,M,D,T1,T2,A){
+  lvl1 <- df[df$Year==Y & df$Month==M & df$DayofMonth==D & df$CRSArrTime>=T1 & df$CRSArrTime<=T2 & df$Dest==A & df$aDelay==1,] 
+  lvl2 <- df[df$Year==Y & df$Month==M & df$DayofMonth==D & df$CRSDepTime>=T1 & df$CRSDepTime<=T2 & df$Origin==A & df$dDelay==1 & df$aDelay==1,] 
+  if (nrow(lvl1)>0 & nrow(lvl2>0)){
+    cat('There was delay in ', airports$airport[airports$iata==A] ,' airport from time ', T1 , ' to ' , T2, sep = '')
+    cat(paste('\nwhich has created cascading delays in', airports$airport[match(lvl2$Dest, airports$iata)], "airport"))
+  }
+  else if (nrow(lvl1)>0 & nrow(lvl2)==0){
+    cat('There was delay in ', airports$airport[airports$iata==A] ,' airport from time ', T1 , ' to ' , T2, ' but it does not create any cascading delay in other airports.' ,sep = '')
+  }
+  else if (nrow(lvl1)==0){
+    cat('There was no delay in ', airports$airport[airports$iata==A] ,' airport from time ', T1 , ' to ' , T2, '. So, it did not cause any cascading delay in other airports.', sep = '')
+  }
+}
+```
+example 1:
+```{r}
+detector(2002,1,31,1500,1600,'CLT')
+```
+
+example 2:
+```{r}
+detector(2003,2,22,2300,2400,'BOS')
+```
+
+example 3:
+```{r}
+detector(2002,1,10,2200,2300,'PHX')
+```
+
+## Question 5
+```{r}
+set.seed(2002)
+
+#refactor variables
+joindf[, c('aDelay', "Year", 'Month', 'DayOfWeek', 'dDelay', 'time', 'season')] <- lapply(joindf[, c('aDelay', "Year", 'Month', 'DayOfWeek', 'dDelay', 'time', 'season')], factor)
+
+# perform train test split
+train <- sample.split(joindf$aDelay, 0.7)
+trainset <- subset(joindf, train == T)
+testset <- subset(joindf, train == F)
+```
+
+Build logistic regression model to predict flight delay
+```{r}
+logistic <- glm(aDelay ~ Year+ Month+ DayOfWeek+ AirTime + Distance+ dDelay+ time+  season + age, data = trainset, family = binomial)
+summary(logistic)
+```
+
+Investigate model prediction result
+```{r}
+prediction <- predict(logistic, testset, type = 'response')
+
+threshold <- 0.5
+
+Yes.hat <- ifelse(prediction > threshold, 1, 0)
+
+table1 <- table(actual = testset$aDelay, model_prediction = Yes.hat)
+table1
+
+table2 <- prop.table(table1,margin = 1)
+table2
+
+accuracy <- mean(Yes.hat == (testset$aDelay==1))
+accuracy
+
+precision <- table2[1,1]
+precision
+
+recall <- table2[2,2]
+recall
+
+f1_score <- 2 * (precision * recall) / (precision + recall)
+f1_score
+
+roc_obj <- roc(testset$aDelay, Yes.hat)
+auc <- auc(roc_obj)
+auc
+```
+
+
+
